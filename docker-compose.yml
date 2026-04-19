@@ -168,6 +168,8 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       - user-service
+      - account-service
+      - transaction-service
 
   # ─── Services ──────────────────────────────────────────────────────
 
@@ -184,3 +186,35 @@ services:
       - ./services/user-service/.env
     ports:
       - "3001:3001"
+
+  account-service:
+    build:
+      context: ./services/account-service
+      dockerfile: Dockerfile
+    container_name: account-service
+    networks: [fintech-net]
+    depends_on:
+      postgres-account:
+        condition: service_healthy
+    env_file:
+      - ./services/account-service/.env
+    ports:
+      - "3002:3002"
+
+  transaction-service:
+    build:
+      context: ./services/transaction-service
+      dockerfile: Dockerfile
+    container_name: transaction-service
+    networks: [fintech-net]
+    depends_on:
+      postgres-transaction:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      account-service:
+        condition: service_started
+    env_file:
+      - ./services/transaction-service/.env
+    ports:
+      - "3003:3003"
