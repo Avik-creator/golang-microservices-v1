@@ -1,4 +1,4 @@
-module avikmukherjee/m
+module avikmukherjee/m/notification-service
 
 go 1.26.1
 
