@@ -1,5 +1,3 @@
-version: "3.9"
-
 networks:
   fintech-net:
     driver: bridge
@@ -182,8 +180,12 @@ services:
     depends_on:
       postgres-user:
         condition: service_healthy
-    env_file:
-      - ./services/user-service/.env
+    environment:
+      DB_HOST: postgres-user
+      DB_PORT: "5432"
+      DB_NAME: userdb
+      DB_USER: postgres
+      DB_PASSWORD: secret
     ports:
       - "3001:3001"
 
@@ -196,8 +198,12 @@ services:
     depends_on:
       postgres-account:
         condition: service_healthy
-    env_file:
-      - ./services/account-service/.env
+    environment:
+      DB_HOST: postgres-account
+      DB_PORT: "5432"
+      DB_NAME: accountdb
+      DB_USER: postgres
+      DB_PASSWORD: secret
     ports:
       - "3002:3002"
 
@@ -214,7 +220,11 @@ services:
         condition: service_healthy
       account-service:
         condition: service_started
-    env_file:
-      - ./services/transaction-service/.env
+    environment:
+      DB_HOST: postgres-transaction
+      DB_PORT: "5432"
+      DB_NAME: transactiondb
+      DB_USER: postgres
+      DB_PASSWORD: secret
     ports:
       - "3003:3003"

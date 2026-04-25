@@ -63,6 +63,7 @@ func main() {
 	}))
 
 	// Public routes
+	r.Get("/api/v1/users/health", h.Health)
 	r.Route("/api/v1/auth", func(r chi.Router) {
 		r.Post("/register", h.Register)
 		r.Post("/login", h.Login)
@@ -72,7 +73,6 @@ func main() {
 	r.Route("/api/v1/users", func(r chi.Router) {
 		r.Use(middleware.Authenticate(svc))
 		r.Get("/me", h.GetProfile)
-		r.Get("/health", h.Health)
 	})
 
 // ── Server ───────────────────────────────────────────────────────
