@@ -14,11 +14,12 @@ import (
 )
 
 type AccountHandler struct {
-	svc *service.AccountService
+	svc            *service.AccountService
+	internalSecret string
 }
 
-func NewAccountHandler(svc *service.AccountService) *AccountHandler {
-	return &AccountHandler{svc: svc}
+func NewAccountHandler(svc *service.AccountService, internalSecret string) *AccountHandler {
+	return &AccountHandler{svc: svc, internalSecret: internalSecret}
 }
 
 // POST /api/v1/accounts
@@ -77,7 +78,7 @@ func (h *AccountHandler) GetAccount(w http.ResponseWriter, r *http.Request) {
 // POST /internal/accounts/balance  (called by transaction-service, not via gateway)
 func (h *AccountHandler) UpdateBalance(w http.ResponseWriter, r *http.Request) {
 	// Validate internal secret header to prevent direct public access
-	if r.Header.Get("X-Internal-Secret") != "internal-secret-change-me" {
+	if r.Header.Get("X-Internal-Secret") != h.internalSecret {
 		respondError(w, http.StatusForbidden, "forbidden")
 		return
 	}

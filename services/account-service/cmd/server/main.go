@@ -41,7 +41,7 @@ func main() {
 	}
 
 	svc := service.NewAccountService(repo)
-	h := handler.NewAccountHandler(svc)
+	h := handler.NewAccountHandler(svc, cfg.InternalSecret)
 
 	r := chi.NewRouter()
 	r.Use(chimiddleware.RequestID)

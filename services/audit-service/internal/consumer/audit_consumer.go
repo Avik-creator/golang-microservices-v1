@@ -10,6 +10,7 @@ import (
 	"avikmukherjee/m/audit-service/internal/model"
 	"avikmukherjee/m/audit-service/internal/service"
 
+	"github.com/google/uuid"
 	kafkago "github.com/segmentio/kafka-go"
 )
 
@@ -116,8 +117,6 @@ func (c *AuditConsumer) Close() {
 	c.fraudReader.Close()
 }
 
-// generateID produces a simple time-based unique ID.
-// In production swap this for github.com/google/uuid.
 func generateID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
+	return uuid.New().String()
 }

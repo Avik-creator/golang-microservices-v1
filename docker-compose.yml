@@ -186,6 +186,7 @@ services:
       DB_NAME: userdb
       DB_USER: postgres
       DB_PASSWORD: secret
+      JWT_SECRET: ${JWT_SECRET:-fintech-jwt-secret}
     ports:
       - "3001:3001"
 
@@ -204,6 +205,8 @@ services:
       DB_NAME: accountdb
       DB_USER: postgres
       DB_PASSWORD: secret
+      JWT_SECRET: ${JWT_SECRET:-fintech-jwt-secret}
+      INTERNAL_SECRET: ${INTERNAL_SECRET:-fintech-internal-secret}
     ports:
       - "3002:3002"
 
@@ -226,5 +229,7 @@ services:
       DB_NAME: transactiondb
       DB_USER: postgres
       DB_PASSWORD: secret
+      JWT_SECRET: ${JWT_SECRET:-fintech-jwt-secret}
+      INTERNAL_SECRET: ${INTERNAL_SECRET:-fintech-internal-secret}
     ports:
       - "3003:3003"

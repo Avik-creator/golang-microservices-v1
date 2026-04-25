@@ -15,12 +15,16 @@ import (
 const (
 	TopicTransactionEvents = "transactions.events"
 	TopicFraudAlerts       = "fraud.alerts"
+	TopicDeadLetter        = "fraud.dead-letter"
+	maxRetries             = 3
 )
 
 type FraudConsumer struct {
-	reader *kafkago.Reader
-	writer *kafkago.Writer
-	engine *service.FraudEngine
+	reader  *kafkago.Reader
+	writer  *kafkago.Writer
+	dlq     *kafkago.Writer
+	engine  *service.FraudEngine
+	retries map[string]int // key: partition:offset string
 }
 
 func NewFraudConsumer(broker, groupID string, engine *service.FraudEngine) *FraudConsumer {
@@ -31,22 +35,26 @@ func NewFraudConsumer(broker, groupID string, engine *service.FraudEngine) *Frau
 		MinBytes:       1,
 		MaxBytes:       10e6,
 		CommitInterval: time.Second,
-		// Start from the earliest unread offset for this consumer group
-		StartOffset: kafkago.FirstOffset,
+		StartOffset:    kafkago.FirstOffset,
 	})
 
-	writer := &kafkago.Writer{
-		Addr:         kafkago.TCP(broker),
-		Balancer:     &kafkago.LeastBytes{},
-		MaxAttempts:  3,
-		WriteTimeout: 10 * time.Second,
-		RequiredAcks: kafkago.RequireAll,
+	makeWriter := func(topic string) *kafkago.Writer {
+		return &kafkago.Writer{
+			Addr:         kafkago.TCP(broker),
+			Topic:        topic,
+			Balancer:     &kafkago.LeastBytes{},
+			MaxAttempts:  3,
+			WriteTimeout: 10 * time.Second,
+			RequiredAcks: kafkago.RequireAll,
+		}
 	}
 
 	return &FraudConsumer{
-		reader: reader,
-		writer: writer,
-		engine: engine,
+		reader:  reader,
+		writer:  makeWriter(TopicFraudAlerts),
+		dlq:     makeWriter(TopicDeadLetter),
+		engine:  engine,
+		retries: make(map[string]int),
 	}
 }
 
@@ -59,7 +67,6 @@ func (c *FraudConsumer) Start(ctx context.Context) {
 		msg, err := c.reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
-				// Context cancelled — clean shutdown
 				log.Println("[fraud-consumer] stopping")
 				return
 			}
@@ -68,14 +75,23 @@ func (c *FraudConsumer) Start(ctx context.Context) {
 			continue
 		}
 
+		msgKey := msgID(msg)
+
 		if err := c.process(ctx, msg); err != nil {
-			log.Printf("[fraud-consumer] process error for offset %d: %v", msg.Offset, err)
-			// Do NOT commit — message will be redelivered on restart.
-			// In production, route to a dead-letter topic after N retries.
+			c.retries[msgKey]++
+			log.Printf("[fraud-consumer] process error (attempt %d/%d) offset=%d: %v",
+				c.retries[msgKey], maxRetries, msg.Offset, err)
+
+			if c.retries[msgKey] >= maxRetries {
+				log.Printf("[fraud-consumer] max retries reached, routing offset=%d to DLQ", msg.Offset)
+				c.sendToDLQ(ctx, msg, err)
+				delete(c.retries, msgKey)
+				c.reader.CommitMessages(ctx, msg) //nolint:errcheck
+			}
 			continue
 		}
 
-		// Commit only after successful processing (at-least-once delivery)
+		delete(c.retries, msgKey)
 		if err := c.reader.CommitMessages(ctx, msg); err != nil {
 			log.Printf("[fraud-consumer] commit error: %v", err)
 		}
@@ -86,10 +102,9 @@ func (c *FraudConsumer) process(ctx context.Context, msg kafkago.Message) error 
 	var event model.TransactionEvent
 	if err := json.Unmarshal(msg.Value, &event); err != nil {
 		log.Printf("[fraud-consumer] bad message payload: %v", err)
-		return nil // malformed — skip, don't retry
+		return nil // malformed — skip immediately, no retry
 	}
 
-	// Only evaluate completed transactions
 	if event.EventType != "transaction.completed" {
 		return nil
 	}
@@ -121,20 +136,36 @@ func (c *FraudConsumer) publishAlert(ctx context.Context, event *model.Transacti
 		return err
 	}
 
-	err = c.writer.WriteMessages(ctx, kafkago.Message{
-		Topic: TopicFraudAlerts,
+	if err := c.writer.WriteMessages(ctx, kafkago.Message{
 		Key:   []byte(alert.TransactionID),
 		Value: payload,
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 
-	log.Printf("[fraud-consumer] 🚨 fraud alert published for tx=%s score=%d", alert.TransactionID, alert.Score)
+	log.Printf("[fraud-consumer] fraud alert published for tx=%s score=%d", alert.TransactionID, alert.Score)
 	return nil
+}
+
+func (c *FraudConsumer) sendToDLQ(ctx context.Context, msg kafkago.Message, cause error) {
+	if err := c.dlq.WriteMessages(ctx, kafkago.Message{
+		Key:   msg.Key,
+		Value: msg.Value,
+		Headers: []kafkago.Header{
+			{Key: "source-topic", Value: []byte(TopicTransactionEvents)},
+			{Key: "error", Value: []byte(cause.Error())},
+		},
+	}); err != nil {
+		log.Printf("[fraud-consumer] DLQ write failed: %v", err)
+	}
 }
 
 func (c *FraudConsumer) Close() {
 	c.reader.Close()
 	c.writer.Close()
+	c.dlq.Close()
+}
+
+func msgID(msg kafkago.Message) string {
+	return string(msg.Key)
 }

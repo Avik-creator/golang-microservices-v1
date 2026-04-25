@@ -8,10 +8,11 @@ import (
 )
 
 type Config struct {
-	Port      string
-	Env       string
-	DB        DBConfig
-	JWTSecret string
+	Port           string
+	Env            string
+	DB             DBConfig
+	JWTSecret      string
+	InternalSecret string
 }
 
 type DBConfig struct {
@@ -32,9 +33,10 @@ func (d DBConfig) DSN() string {
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 	return &Config{
-		Port:      getEnv("PORT", "3002"),
-		Env:       getEnv("ENV", "development"),
-		JWTSecret: getEnv("JWT_SECRET", "default-secret"),
+		Port:           getEnv("PORT", "3002"),
+		Env:            getEnv("ENV", "development"),
+		JWTSecret:      getEnv("JWT_SECRET", "default-secret"),
+		InternalSecret: getEnv("INTERNAL_SECRET", "internal-secret-change-me"),
 		DB: DBConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     getEnv("DB_PORT", "5432"),
