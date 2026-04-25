@@ -1,8 +1,10 @@
 package consumer
 
 import (
+	"avikmukherjee/m/notification-service/internal/model"
 	"avikmukherjee/m/notification-service/internal/service"
 	"context"
+	"encoding/json"
 	"log"
 	"time"
 
@@ -49,4 +51,74 @@ func (c *NotificationConsumer) Start(ctx context.Context) {
 
 	<-ctx.Done()
 	log.Println("[notification-consumer] context cancelled, stopping")
+}
+
+func (c *NotificationConsumer) consumeTransactions(ctx context.Context) {
+	for {
+		msg, err := c.txReader.FetchMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("[notification-consumer] tx fetch error: %v", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		var event model.TransactionEvent
+		if err := json.Unmarshal(msg.Value, &event); err != nil {
+			log.Printf("[notification-consumer] bad tx payload: %v", err)
+			c.txReader.CommitMessages(ctx, msg)
+			continue
+		}
+
+		// Only notify on terminal states
+		if event.EventType != "transaction.completed" && event.EventType != "transaction.failed" {
+			c.txReader.CommitMessages(ctx, msg)
+			continue
+		}
+
+		email := service.BuildTransactionEmail(&event)
+		if err := c.mailer.Send(email); err != nil {
+			log.Printf("[notification-consumer] email send failed: %v", err)
+			// Don't commit — will retry on restart
+			continue
+		}
+
+		c.txReader.CommitMessages(ctx, msg)
+	}
+}
+
+func (c *NotificationConsumer) consumeFraudAlerts(ctx context.Context) {
+	for {
+		msg, err := c.fraudReader.FetchMessage(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			log.Printf("[notification-consumer] fraud fetch error: %v", err)
+			time.Sleep(2 * time.Second)
+			continue
+		}
+
+		var alert model.FraudAlert
+		if err := json.Unmarshal(msg.Value, &alert); err != nil {
+			log.Printf("[notification-consumer] bad fraud payload: %v", err)
+			c.fraudReader.CommitMessages(ctx, msg)
+			continue
+		}
+
+		email := service.BuildFraudAlertEmail(&alert)
+		if err := c.mailer.Send(email); err != nil {
+			log.Printf("[notification-consumer] fraud alert email failed: %v", err)
+			continue
+		}
+
+		c.fraudReader.CommitMessages(ctx, msg)
+	}
+}
+
+func (c *NotificationConsumer) Close() {
+	c.txReader.Close()
+	c.fraudReader.Close()
 }
