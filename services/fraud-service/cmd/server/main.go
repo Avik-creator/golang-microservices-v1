@@ -27,7 +27,7 @@ func main() {
 	}
 
 	// ── Fraud Engine ─────────────────────────────────────────────────
-	engine := service.NewFraudEngine(cfg.FraudLargeTxAmount, cfg.FraudMaxTxPerMinute)
+	service.NewFraudEngine(cfg.FraudLargeTxAmount, cfg.FraudMaxTxPerMinute)
 
 	// ── Kafka Consumer ───────────────────────────────────────────────
 	// Waits for Kafka to be ready before consuming
