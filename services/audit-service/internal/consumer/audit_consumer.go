@@ -17,12 +17,16 @@ import (
 const (
 	TopicTransactionEvents = "transactions.events"
 	TopicFraudAlerts       = "fraud.alerts"
+	TopicDeadLetter        = "audit.dead-letter"
+	maxRetries             = 3
 )
 
 type AuditConsumer struct {
 	txReader    *kafkago.Reader
 	fraudReader *kafkago.Reader
+	dlq         *kafkago.Writer
 	store       *service.AuditStore
+	retries     map[string]int // key: msg key string, tracks per-message attempts
 }
 
 func NewAuditConsumer(broker, groupID string, store *service.AuditStore) *AuditConsumer {
@@ -38,10 +42,21 @@ func NewAuditConsumer(broker, groupID string, store *service.AuditStore) *AuditC
 		})
 	}
 
+	dlq := &kafkago.Writer{
+		Addr:         kafkago.TCP(broker),
+		Topic:        TopicDeadLetter,
+		Balancer:     &kafkago.LeastBytes{},
+		MaxAttempts:  3,
+		WriteTimeout: 10 * time.Second,
+		RequiredAcks: kafkago.RequireAll,
+	}
+
 	return &AuditConsumer{
 		txReader:    makeReader(TopicTransactionEvents),
 		fraudReader: makeReader(TopicFraudAlerts),
+		dlq:         dlq,
 		store:       store,
+		retries:     make(map[string]int),
 	}
 }
 
@@ -73,13 +88,25 @@ func (c *AuditConsumer) consumeTopic(
 			continue
 		}
 
+		msgKey := fmt.Sprintf("%s:%d:%d", topic, msg.Partition, msg.Offset)
+
 		if err := c.record(ctx, msg, topic, eventType); err != nil {
-			log.Printf("[audit-consumer] record error (offset %d): %v — will retry", msg.Offset, err)
-			// Don't commit — kafka will redeliver on next restart (at-least-once)
-			time.Sleep(time.Second)
+			c.retries[msgKey]++
+			log.Printf("[audit-consumer] record error (attempt %d/%d) offset=%d: %v",
+				c.retries[msgKey], maxRetries, msg.Offset, err)
+
+			if c.retries[msgKey] >= maxRetries {
+				log.Printf("[audit-consumer] max retries reached, routing offset=%d to DLQ", msg.Offset)
+				c.sendToDLQ(ctx, msg, topic, err)
+				delete(c.retries, msgKey)
+				reader.CommitMessages(ctx, msg) //nolint:errcheck
+			} else {
+				time.Sleep(time.Second)
+			}
 			continue
 		}
 
+		delete(c.retries, msgKey)
 		if err := reader.CommitMessages(ctx, msg); err != nil {
 			log.Printf("[audit-consumer] commit error: %v", err)
 		}
@@ -87,15 +114,12 @@ func (c *AuditConsumer) consumeTopic(
 }
 
 // record deserialises the raw Kafka message and writes an AuditRecord to MinIO.
-// We store the raw payload as-is so the audit log is a faithful, tamper-evident
-// copy of every event that passed through the system.
 func (c *AuditConsumer) record(
 	ctx context.Context,
 	msg kafkago.Message,
 	topic string,
 	eventType model.AuditEventType,
 ) error {
-	// Decode payload into a generic map so we preserve all fields verbatim
 	var payload map[string]any
 	if err := json.Unmarshal(msg.Value, &payload); err != nil {
 		return fmt.Errorf("unmarshal payload: %w", err)
@@ -112,9 +136,23 @@ func (c *AuditConsumer) record(
 	return c.store.Write(ctx, auditRecord)
 }
 
+func (c *AuditConsumer) sendToDLQ(ctx context.Context, msg kafkago.Message, sourceTopic string, cause error) {
+	if err := c.dlq.WriteMessages(ctx, kafkago.Message{
+		Key:   msg.Key,
+		Value: msg.Value,
+		Headers: []kafkago.Header{
+			{Key: "source-topic", Value: []byte(sourceTopic)},
+			{Key: "error", Value: []byte(cause.Error())},
+		},
+	}); err != nil {
+		log.Printf("[audit-consumer] DLQ write failed: %v", err)
+	}
+}
+
 func (c *AuditConsumer) Close() {
 	c.txReader.Close()
 	c.fraudReader.Close()
+	c.dlq.Close()
 }
 
 func generateID() string {

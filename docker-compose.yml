@@ -233,3 +233,60 @@ services:
       INTERNAL_SECRET: ${INTERNAL_SECRET:-fintech-internal-secret}
     ports:
       - "3003:3003"
+
+  fraud-service:
+    build:
+      context: ./services/fraud-service
+      dockerfile: Dockerfile
+    container_name: fraud-service
+    networks: [fintech-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER: kafka:9092
+      KAFKA_GROUP_ID: fraud-service-group
+      INTERNAL_SECRET: ${INTERNAL_SECRET:-fintech-internal-secret}
+    ports:
+      - "3004:3004"
+
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    container_name: notification-service
+    networks: [fintech-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    environment:
+      KAFKA_BROKER: kafka:9092
+      KAFKA_GROUP_ID: notification-service-group
+      SMTP_HOST: mailhog
+      SMTP_PORT: "1025"
+      SMTP_FROM: noreply@fintech.local
+    ports:
+      - "3005:3005"
+
+  audit-service:
+    build:
+      context: ./services/audit-service
+      dockerfile: Dockerfile
+    container_name: audit-service
+    networks: [fintech-net]
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    environment:
+      KAFKA_BROKER: kafka:9092
+      KAFKA_GROUP_ID: audit-service-group
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_BUCKET: audit-logs
+    ports:
+      - "3006:3006"
